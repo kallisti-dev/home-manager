@@ -33,6 +33,7 @@
     assertFileExists home-files/.gemini/antigravity-cli/settings.json
     assertFileContent home-files/.gemini/antigravity-cli/settings.json \
       ${./settings.json}
+    assertPathNotExists home-files/.gemini/config/mcp_config.json
     assertFileExists home-files/.gemini/antigravity-cli/skills/changelog/SKILL.md
     assertFileRegex home-files/.gemini/antigravity-cli/skills/changelog/SKILL.md \
       'name: changelog'

@@ -20,5 +20,6 @@
   ];
   nmt.script = ''
     assertPathNotExists home-files/.gemini/antigravity-cli/settings.json
+    assertPathNotExists home-files/.gemini/config/mcp_config.json
   '';
 }

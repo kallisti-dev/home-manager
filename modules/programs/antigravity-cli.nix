@@ -173,10 +173,16 @@ in
         existing values. Unset permission lists preserve saved grants; an
         explicit list replaces the saved list, including an empty list.
         MCP files accept comments and trailing commas, but
-        are written as JSON without comments or original formatting. Removing
-        a declaration does not remove it from the file. Switching back to
-        immutable settings only removes byte-identical files; changed files
-        require backup or removal.
+        are written as JSON without comments or original formatting.
+
+        With [](#opt-home.mutableSettings.removeDropped), settings removed
+        from the configuration are removed from the files unless Antigravity
+        CLI has changed them since. MCP servers are removed whole, with what
+        Antigravity CLI added to them, or kept whole if a declared value
+        changed; permission rules and trusted workspaces it added are kept.
+
+        Switching back to immutable settings only removes byte-identical
+        files; changed files require backup or removal.
       '';
     };
 
@@ -492,16 +498,44 @@ in
       legacyMcpServers = lib.optionalAttrs (cfg.settings ? mcpServers) cfg.settings.mcpServers;
       mcpServers = lib.recursiveUpdate legacyMcpServers cfg.mcpServers;
       json5 = pkgs.python3Packages.toPythonApplication pkgs.python3Packages.json5;
-      nativeSettingsFiles =
-        lib.optionalAttrs (antigravitySettings != { }) {
-          ".gemini/antigravity-cli/settings.json" =
-            jsonFormat.generate "antigravity-cli-settings.json" antigravitySettings;
-        }
-        // lib.optionalAttrs (mcpServers != { }) {
-          ".gemini/config/mcp_config.json" = jsonFormat.generate "antigravity-cli-mcp-config.json" {
-            mcpServers = transformMcpServers mcpServers;
-          };
+      mcpSettings = lib.optionalAttrs (mcpServers != { }) {
+        mcpServers = transformMcpServers mcpServers;
+      };
+      nativeSettingsFiles = {
+        ".gemini/antigravity-cli/settings.json" = {
+          settings = antigravitySettings;
+          source = jsonFormat.generate "antigravity-cli-settings.json" antigravitySettings;
+          reader = null;
+          removal.sets = [
+            [
+              "permissions"
+              "allow"
+            ]
+            [
+              "permissions"
+              "ask"
+            ]
+            [
+              "permissions"
+              "deny"
+            ]
+            [ "trustedWorkspaces" ]
+          ];
         };
+        ".gemini/config/mcp_config.json" = {
+          settings = mcpSettings;
+          source = jsonFormat.generate "antigravity-cli-mcp-config.json" mcpSettings;
+          reader = "${lib.getExe json5} --as-json";
+          # Antigravity CLI rejects a server without `command` or `serverUrl`.
+          removal.atomic = [
+            [
+              "mcpServers"
+              "*"
+            ]
+          ];
+        };
+      };
+      declaredSettingsFiles = lib.filterAttrs (_: file: file.settings != { }) nativeSettingsFiles;
       geminiSettings =
         lib.recursiveUpdate
           (lib.optionalAttrs (permissions != { }) {
@@ -606,31 +640,34 @@ in
 
           home = {
             activation = {
-              antigravitySettings = lib.mkIf (cfg.mutableSettings && nativeSettingsFiles != { }) (
+              antigravitySettings = lib.mkIf cfg.mutableSettings (
                 lib.hm.dag.entryAfter [ "linkGeneration" ] (
                   lib.concatStringsSep "\n" (
                     lib.mapAttrsToList (
-                      name: source:
+                      name: file:
                       lib.hm.generators.mkImpureConfigMerger {
                         inherit pkgs;
+                        inherit (file) reader;
                         format = "json";
                         empty = "{}";
                         jqOperation = "$dynamic * $static";
                         path = "${config.home.homeDirectory}/${name}";
-                        staticSettings = source;
+                        staticSettings = file.source;
                         mode = "600";
-                        reader = if name == ".gemini/config/mcp_config.json" then "${lib.getExe json5} --as-json" else null;
+                        removal = file.removal // {
+                          enable = config.home.mutableSettings.removeDropped;
+                        };
                       }
                     ) nativeSettingsFiles
                   )
                 )
               );
-              antigravityImmutableSettings = lib.mkIf (!cfg.mutableSettings && nativeSettingsFiles != { }) (
+              antigravityImmutableSettings = lib.mkIf (!cfg.mutableSettings && declaredSettingsFiles != { }) (
                 lib.hm.dag.entryBetween [ "linkGeneration" ] [ "writeBoundary" ] (
                   lib.concatStringsSep "\n" (
                     lib.mapAttrsToList (
                       name: _: lib.hm.generators.mkImpureConfigCleanup { file = config.home.file.${name}; }
-                    ) nativeSettingsFiles
+                    ) declaredSettingsFiles
                   )
                 )
               );
@@ -638,7 +675,7 @@ in
 
             file =
               lib.optionalAttrs (!cfg.mutableSettings) (
-                lib.mapAttrs (_: source: { inherit source; }) nativeSettingsFiles
+                lib.mapAttrs (_: file: { inherit (file) source; }) declaredSettingsFiles
               )
               // lib.mapAttrs' (
                 n: v:

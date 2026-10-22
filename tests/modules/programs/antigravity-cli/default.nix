@@ -9,6 +9,7 @@
   antigravity-cli-mutable-legacy-explicit = ./mutable-legacy-explicit.nix;
   antigravity-cli-mutable-legacy-package = ./mutable-legacy-package.nix;
   antigravity-cli-mutable-empty = ./mutable-empty.nix;
+  antigravity-cli-mutable-removal = ./mutable-removal.nix;
   antigravity-cli-immutable-empty = ./immutable-empty.nix;
   antigravity-cli-mutable-settings = ./mutable-settings.nix;
   antigravity-cli-settings = ./settings.nix;
