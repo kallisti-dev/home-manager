@@ -17,11 +17,28 @@ let
       name = "settings.json";
       inherit (cfg) settings;
       mutable = cfg.mutableSettings;
+      removal.sets = [ [ "spellCheckLanguages" ] ];
     }
     {
       name = "settings/settings.json";
       settings = cfg.vencord.settings;
       mutable = cfg.vencord.mutableSettings;
+      removal = {
+        # Vencord reads a plugin entry without `enabled` as disabled, also for
+        # plugins that are on by default, and some plugins keep data such as
+        # text replacement rules in their entry, which must not go with it.
+        keep = [
+          [
+            "plugins"
+            "*"
+            "enabled"
+          ]
+        ];
+        sets = [
+          [ "enabledThemes" ]
+          [ "themeLinks" ]
+        ];
+      };
     }
   ];
   immutableConfigCleanup = lib.concatMapStrings (
@@ -29,6 +46,7 @@ let
       name,
       settings,
       mutable,
+      ...
     }:
     lib.optionalString (!mutable && settings != { }) (
       lib.hm.generators.mkImpureConfigCleanup {
@@ -43,9 +61,15 @@ let
     description = ''
       Merge declarative settings into a writable JSON file during activation,
       preserving settings changed in the application. Declarative values take
-      precedence; arrays are replaced rather than merged. Removing a
-      declarative setting does not remove it from the file. Formatting is
-      not preserved. Close Vesktop before activating to avoid concurrent writes.
+      precedence; arrays are replaced rather than merged. Formatting is not
+      preserved. Close Vesktop before activating to avoid concurrent writes.
+
+      With [](#opt-home.mutableSettings.removeDropped), settings removed from
+      the configuration are removed from the file unless the application has
+      changed them since. A Vencord plugin keeps its `enabled` value, so a
+      plugin removed from the configuration stays enabled or disabled, along
+      with data stored in its entry; spellcheck languages and themes added in
+      the application are kept.
 
       When disabled, files byte-identical to the generated configuration are
       replaced with managed symlinks. Other files use normal collision handling.
@@ -81,6 +105,7 @@ in
             name,
             settings,
             mutable,
+            ...
           }:
           lib.mkIf (mutable && settings != { }) {
             "${fileDir}/${name}".enable = false;
@@ -95,8 +120,9 @@ in
               name,
               settings,
               mutable,
+              removal,
             }:
-            lib.optionalString (mutable && settings != { }) (
+            lib.optionalString mutable (
               lib.hm.generators.mkImpureConfigMerger {
                 inherit pkgs;
                 format = "json";
@@ -104,11 +130,16 @@ in
                 jqOperation = "$dynamic * $static";
                 path =
                   let
-                    target = config.home.file."${fileDir}/${name}".target;
+                    # The file entry, which may set another target, exists
+                    # only while settings are declared.
+                    target = config.home.file."${fileDir}/${name}".target or "${fileDir}/${name}";
                   in
                   if lib.hasPrefix "/" target then target else "${config.home.homeDirectory}/${target}";
                 staticSettings = jsonFormat.generate "vesktop-${baseNameOf name}" settings;
                 mode = "600";
+                removal = removal // {
+                  enable = config.home.mutableSettings.removeDropped;
+                };
               }
             )
           ) settingsFiles

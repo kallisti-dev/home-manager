@@ -10,8 +10,15 @@ let
       "Library/Application Support/vesktop"
     else
       "custom-config/vesktop";
+  activation = pkgs.writeShellScript "activate-vesktop-settings" ''
+    set -euo pipefail
+    ${config.lib.bash.initHomeManagerLib}
+    ${config.home.activation.vesktopSettings.data}
+  '';
 in
 {
+  home.homeDirectory = lib.mkForce "/@TMPDIR@/hm-user";
+  home.mutableSettings.removeDropped = true;
   xdg.configHome = "${config.home.homeDirectory}/custom-config";
   programs.vesktop = {
     enable = true;
@@ -24,8 +31,10 @@ in
 
   assertions = [
     {
-      assertion = config.home.activation.vesktopSettings.data == "";
-      message = "Empty mixed-ownership settings must not generate mutable writes.";
+      assertion =
+        lib.hasInfix "vesktop/settings.json" config.home.activation.vesktopSettings.data
+        && !lib.hasInfix "settings/settings.json" config.home.activation.vesktopSettings.data;
+      message = "Empty mixed-ownership settings must be merged only into the mutable file.";
     }
     {
       assertion =
@@ -49,9 +58,17 @@ in
       message = "Vesktop mutable activation must follow link generation.";
     }
   ];
+  # The merge still runs, so settings removed last are removed, but without
+  # a record it creates nothing.
   nmt.script = ''
     assertPathNotExists "home-files/${relativeDir}/settings.json"
     assertPathNotExists "home-files/${relativeDir}/settings/settings.json"
     assertFileContains "home-files/${relativeDir}/settings/quickCss.css" "body { color: red; }"
+    export HOME=$TMPDIR/hm-user
+    substitute ${activation} "$TMPDIR/activate" --subst-var TMPDIR
+    chmod +x "$TMPDIR/activate"
+    "$TMPDIR/activate"
+    assertPathNotExists "$HOME/${relativeDir}/settings.json"
+    assertPathNotExists "$HOME/.local/state"
   '';
 }
