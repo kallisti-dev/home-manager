@@ -6,4 +6,5 @@
   t3code-settings-empty = ./settings-empty.nix;
   t3code-server = ./server.nix;
   t3code-server-environment-file = ./server-environment-file.nix;
+  t3code-removal = ./removal.nix;
 }

@@ -43,6 +43,13 @@ let
     "serve"
   ]
   ++ serverCfg.extraArgs;
+
+  modelSelections = [
+    "defaultModelSelection"
+    "textGenerationModelSelection"
+    "sourceControlWriterModelSelection"
+    "reviewGuideModelSelection"
+  ];
 in
 {
   meta.maintainers = [
@@ -79,6 +86,13 @@ in
       example = false;
       description = ''
         Whether user settings ({file}`settings.json`) can be updated by t3code.
+
+        Declared settings are then merged into the file at activation. With
+        [](#opt-home.mutableSettings.removeDropped), settings removed from the
+        configuration are removed from the file unless T3 Code has changed
+        them since. Provider instances, model selections and similar entries
+        are removed whole, with what T3 Code added to them, or kept whole if
+        T3 Code changed a declared value; list entries T3 Code added are kept.
       '';
     };
 
@@ -88,6 +102,12 @@ in
       example = false;
       description = ''
         Whether user keybindings ({file}`keybindings.json`) can be updated by t3code.
+
+        Declared keybindings are then merged into the file at activation, by
+        key and `when` condition. With
+        [](#opt-home.mutableSettings.removeDropped), a keybinding removed from
+        the configuration is removed from the file unless its command has
+        changed since.
       '';
     };
 
@@ -97,6 +117,12 @@ in
       example = false;
       description = ''
         Whether client settings ({file}`client-settings.json`) can be updated by t3code.
+
+        Declared settings are then merged into the file at activation. With
+        [](#opt-home.mutableSettings.removeDropped), settings removed from the
+        configuration are removed from the file unless T3 Code has changed
+        them since. The snapshot shortcut and default browser viewport are
+        removed whole, or kept whole if T3 Code changed a declared value.
       '';
     };
 
@@ -209,7 +235,7 @@ in
           lib.hm.dag.entryBetween [ "linkGeneration" ] [ "writeBoundary" ]
             immutableConfigCleanup;
       })
-      (mkIf (cfg.mutableUserSettings && cfg.userSettings != { }) {
+      (mkIf cfg.mutableUserSettings {
         t3codeSettingsActivation = lib.hm.dag.entryAfter [ "linkGeneration" ] (
           lib.hm.generators.mkImpureConfigMerger {
             inherit pkgs;
@@ -220,10 +246,59 @@ in
             mode = "600";
             staticSettings = jsonFormat.generate "t3code-user-settings" cfg.userSettings;
             reader = "${lib.getExe json5} --as-json";
+            removal = {
+              enable = config.home.mutableSettings.removeDropped;
+              # T3 Code ignores the whole file once one of these loses a
+              # declared key, for example a provider instance without `driver`
+              # or a model selection without `model`.
+              atomic = [
+                [
+                  "providerInstances"
+                  "*"
+                ]
+                [
+                  "usageLimitSources"
+                  "*"
+                ]
+                [
+                  "usagePriceOverrides"
+                  "*"
+                ]
+              ]
+              ++ lib.concatMap (key: [
+                [ key ]
+                [
+                  "projectSettingsOverrides"
+                  "*"
+                  key
+                ]
+              ]) (modelSelections ++ [ "worktreeCleanup" ]);
+              sets = [
+                [ "favorites" ]
+                [ "defaultProjectScripts" ]
+                [
+                  "providerModelPreferences"
+                  "*"
+                  "hiddenModels"
+                ]
+              ];
+              # T3 Code adds defaults such as `kind` to the hosts it saves.
+              maps =
+                map
+                  (key: {
+                    path = [ key ];
+                    keys = [ "id" ];
+                    atomic = true;
+                  })
+                  [
+                    "deviceHosts"
+                    "easDeviceHosts"
+                  ];
+            };
           }
         );
       })
-      (mkIf (cfg.mutableKeybindings && cfg.keybindings != [ ]) {
+      (mkIf cfg.mutableKeybindings {
         t3codeKeybindingsActivation = lib.hm.dag.entryAfter [ "linkGeneration" ] (
           lib.hm.generators.mkImpureConfigMerger {
             inherit pkgs;
@@ -233,10 +308,23 @@ in
             path = "${userDataDir}/keybindings.json";
             staticSettings = jsonFormat.generate "t3code-user-keybindings" cfg.keybindings;
             reader = "${lib.getExe json5} --as-json";
+            removal = {
+              enable = config.home.mutableSettings.removeDropped;
+              maps = [
+                {
+                  path = [ ];
+                  keys = [
+                    "key"
+                    "when"
+                  ];
+                  atomic = true;
+                }
+              ];
+            };
           }
         );
       })
-      (mkIf (cfg.mutableClientSettings && cfg.clientSettings != { }) {
+      (mkIf cfg.mutableClientSettings {
         t3codeClientSettingsActivation = lib.hm.dag.entryAfter [ "linkGeneration" ] (
           lib.hm.generators.mkImpureConfigMerger {
             inherit pkgs;
@@ -246,6 +334,15 @@ in
             path = "${userDataDir}/client-settings.json";
             staticSettings = jsonFormat.generate "t3code-client-settings" cfg.clientSettings;
             reader = "${lib.getExe json5} --as-json";
+            removal = {
+              enable = config.home.mutableSettings.removeDropped;
+              # The desktop app ignores the whole file once one of these loses
+              # a declared key.
+              atomic = [
+                [ "snapShotShortcut" ]
+                [ "browserDefaultViewport" ]
+              ];
+            };
           }
         );
       })
