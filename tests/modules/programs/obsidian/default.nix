@@ -1,0 +1,3 @@
+{
+  obsidian-removal = ./removal.nix;
+}

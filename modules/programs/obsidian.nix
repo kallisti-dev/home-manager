@@ -298,7 +298,11 @@ in
     };
 
     vaults = mkOption {
-      description = "List of vaults to create.";
+      description = ''
+        List of vaults to create.
+
+        A vault removed from this option stays in Obsidian's list of vaults.
+      '';
       type = types.attrsOf (
         types.submodule (
           { name, ... }:
@@ -585,6 +589,17 @@ in
               path = obsidianConfigDir + "/obsidian.json";
               staticSettings = template;
               verboseMsg = "Merging existing Obsidian config with generated template";
+              removal = {
+                enable = config.home.mutableSettings.removeDropped;
+                # Obsidian fails to start with a vault that has no `path`, and
+                # deletes the stored data of vaults it no longer lists.
+                keep = [
+                  [
+                    "vaults"
+                    "*"
+                  ]
+                ];
+              };
             }
           );
       };
