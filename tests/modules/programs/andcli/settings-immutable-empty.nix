@@ -15,6 +15,10 @@
       assertion = !(config.home.activation ? andcliMutableSettings);
       message = "andcli settings-immutable-empty must not create mutable activation.";
     }
+    {
+      assertion = !(config.home.activation ? andcliImmutableSettings);
+      message = "andcli settings-immutable-empty must not create immutable cleanup.";
+    }
   ];
 
   nmt.script = ''

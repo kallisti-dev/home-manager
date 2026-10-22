@@ -36,8 +36,10 @@ in
       description = ''
         Whether to merge settings into a writable configuration file during
         activation. Settings declared here take precedence; other settings are
-        preserved. Removing a setting here does not remove it from the file.
-        Comments and formatting are not preserved.
+        preserved. With [](#opt-home.mutableSettings.removeDropped), settings
+        removed from the configuration are removed from the file unless andcli
+        has changed them since; `options` and `theme` are removed whole, with
+        what andcli added to them. Comments and formatting are not preserved.
 
         When switching back to immutable settings, the writable file uses
         Home Manager's normal collision and backup handling.
@@ -68,7 +70,7 @@ in
         source = settingsFile;
       };
 
-      activation.andcliMutableSettings = lib.mkIf (cfg.mutableSettings && cfg.settings != { }) (
+      activation.andcliMutableSettings = lib.mkIf cfg.mutableSettings (
         lib.hm.dag.entryAfter [ "linkGeneration" ] (
           lib.hm.generators.mkImpureConfigMerger {
             inherit pkgs;
@@ -78,6 +80,24 @@ in
             path = settingsPath;
             staticSettings = settingsFile;
             mode = "600";
+            removal = {
+              enable = config.home.mutableSettings.removeDropped;
+              # andcli does not merge these with its defaults: options missing
+              # from the object read as false, and missing colours log a
+              # warning.
+              atomic = [
+                [ "options" ]
+                [ "theme" ]
+              ];
+            };
+          }
+        )
+      );
+
+      activation.andcliImmutableSettings = lib.mkIf (!cfg.mutableSettings && cfg.settings != { }) (
+        lib.hm.dag.entryBetween [ "linkGeneration" ] [ "writeBoundary" ] (
+          lib.hm.generators.mkImpureConfigCleanup {
+            file = config.home.file."${configPath}/config.yaml";
           }
         )
       );
