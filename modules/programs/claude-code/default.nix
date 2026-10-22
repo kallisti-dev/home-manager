@@ -81,18 +81,20 @@ in
   config =
     let
       settingsFile = jsonFormat.generate "claude-code-settings.json" (
-        cfg.settings
-        // {
-          "$schema" = "https://json.schemastore.org/claude-code-settings.json";
-        }
-        // lib.optionalAttrs (cfg.marketplaces != { }) {
-          extraKnownMarketplaces = lib.mapAttrs mkMarketplaceEntry cfg.marketplaces;
-        }
-        // lib.optionalAttrs (disabledMcpServerNames != [ ]) {
-          disabledMcpjsonServers = lib.unique (
-            (cfg.settings.disabledMcpjsonServers or [ ]) ++ disabledMcpServerNames
-          );
-        }
+        lib.optionalAttrs hasSettings (
+          cfg.settings
+          // {
+            "$schema" = "https://json.schemastore.org/claude-code-settings.json";
+          }
+          // lib.optionalAttrs (cfg.marketplaces != { }) {
+            extraKnownMarketplaces = lib.mapAttrs mkMarketplaceEntry cfg.marketplaces;
+          }
+          // lib.optionalAttrs (disabledMcpServerNames != [ ]) {
+            disabledMcpjsonServers = lib.unique (
+              (cfg.settings.disabledMcpjsonServers or [ ]) ++ disabledMcpServerNames
+            );
+          }
+        )
       );
       hasSettings = cfg.settings != { } || cfg.marketplaces != { } || disabledMcpServerNames != [ ];
       installedMarketplaces = lib.mapAttrs (
@@ -109,22 +111,61 @@ in
           entry
       ) cfg.marketplaces;
       marketplacesFile = jsonFormat.generate "claude-code-known-marketplaces.json" installedMarketplaces;
-      mutableFiles =
-        lib.optionalAttrs hasSettings {
-          "${cfg.configDir}/settings.json" = {
-            staticSettings = settingsFile;
-            jqOperation = ''if ($dynamic | type) == "object" and ($static | type) == "object" then $dynamic * $static else error("expected JSON objects") end'';
-          };
-        }
-        // lib.optionalAttrs (cfg.marketplaces != { }) {
-          "${cfg.configDir}/plugins/known_marketplaces.json" = {
-            staticSettings = marketplacesFile;
-            jqOperation = ''
-              ($dynamic * $static) | reduce ($static | keys[]) as $name
-                (.; .[$name] = {lastUpdated: "1970-01-01T00:00:00Z", autoUpdate: false} + .[$name])
-            '';
+      mutableFiles = {
+        "${cfg.configDir}/settings.json" = {
+          staticSettings = settingsFile;
+          jqOperation = ''if ($dynamic | type) == "object" and ($static | type) == "object" then $dynamic * $static else error("expected JSON objects") end'';
+          removal = {
+            # Claude Code refuses the whole file once one of these loses its
+            # declared `type`, and warns about a marketplace without `source`.
+            atomic = [
+              [ "statusLine" ]
+              [ "subagentStatusLine" ]
+              [ "fileSuggestion" ]
+              [
+                "extraKnownMarketplaces"
+                "*"
+              ]
+            ];
+            sets = [
+              [ "disabledMcpjsonServers" ]
+              [
+                "hooks"
+                "*"
+              ]
+              {
+                path = [
+                  "autoMode"
+                  "*"
+                ];
+                # `$defaults` stands for Claude Code's built-in rules, which
+                # the rules Claude Code added would otherwise replace.
+                keep = [ "$defaults" ];
+              }
+            ]
+            ++ map (list: [
+              "permissions"
+              list
+            ]) permissionLists;
           };
         };
+        "${cfg.configDir}/plugins/known_marketplaces.json" = {
+          staticSettings = marketplacesFile;
+          jqOperation = ''
+            ($dynamic * $static) | reduce ($static | keys[]) as $name
+              (.; .[$name] = {lastUpdated: "1970-01-01T00:00:00Z", autoUpdate: false} + .[$name])
+          '';
+          # Claude Code treats the whole file as corrupted once an entry loses
+          # its declared `source` or `installLocation`.
+          removal.atomic = [ [ "*" ] ];
+        };
+      };
+      permissionLists = [
+        "allow"
+        "ask"
+        "deny"
+        "additionalDirectories"
+      ];
       helpers = claudeCodeLib.mkHelpers { inherit (cfg) configDir; };
       inherit (helpers)
         derivePluginName
@@ -329,7 +370,7 @@ in
       );
 
       home.activation = {
-        claudeCodeSettings = lib.mkIf (cfg.mutableSettings && mutableFiles != { }) (
+        claudeCodeSettings = lib.mkIf cfg.mutableSettings (
           lib.hm.dag.entryAfter [ "linkGeneration" ] (
             lib.concatStringsSep "\n" (
               lib.mapAttrsToList (
@@ -340,11 +381,23 @@ in
                   format = "json";
                   empty = "{}";
                   mode = "600";
+                  removal = file.removal // {
+                    enable = config.home.mutableSettings.removeDropped;
+                  };
                 }
               ) mutableFiles
             )
           )
         );
+        claudeCodeImmutableSettings =
+          let
+            cleanup = lib.concatMapStrings (
+              path: lib.hm.generators.mkImpureConfigCleanup { file = config.home.file.${path}; }
+            ) (lib.attrNames (lib.filterAttrs (path: _: config.home.file ? ${path}) mutableFiles));
+          in
+          lib.mkIf (!cfg.mutableSettings && cleanup != "") (
+            lib.hm.dag.entryBetween [ "linkGeneration" ] [ "writeBoundary" ] cleanup
+          );
       };
 
       home = {

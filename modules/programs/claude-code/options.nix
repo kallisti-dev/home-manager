@@ -39,9 +39,18 @@ in
         writable files during activation. Declared values, including
         permission arrays, replace existing values; undeclared values and
         application-owned marketplace timestamps and auto-update flags are
-        preserved. Comments and formatting are not preserved. Removing a
-        declaration does not remove it from the file. Switching back to
-        immutable settings requires backing up or removing the writable files.
+        preserved. Comments and formatting are not preserved.
+
+        With [](#opt-home.mutableSettings.removeDropped), a declaration
+        removed from the configuration is removed from the file unless Claude
+        Code has changed it since. Status line, file suggestion and
+        marketplace entries are removed whole, with what Claude Code added to
+        them, or kept whole if a declared value changed. Permission rules,
+        hooks and other list entries that Claude Code added are kept, and so
+        is `$defaults` in an auto-mode list that still has such entries.
+
+        Switching back to immutable settings replaces a writable file only if
+        it is unchanged; otherwise back it up or remove it.
         This does not manage application state in {file}`~/.claude.json`.
       '';
     };

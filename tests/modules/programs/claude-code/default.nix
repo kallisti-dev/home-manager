@@ -2,6 +2,7 @@
   claude-code-mutable-empty = ./mutable-empty.nix;
   claude-code-mutable-disabled = ./mutable-disabled.nix;
   claude-code-mutable-settings = ./mutable-settings.nix;
+  claude-code-mutable-removal = ./mutable-removal.nix;
   claude-code-basic = ./basic.nix;
   claude-code-config-dir = ./config-dir.nix;
   claude-code-prefer-xdg-directories = ./prefer-xdg-directories.nix;
