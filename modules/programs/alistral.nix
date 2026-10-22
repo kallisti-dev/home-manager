@@ -36,8 +36,13 @@ in
       description = ''
         Merge declarative settings into a writable configuration file during
         activation, preserving settings and credentials written by the application.
-        Declarative values take precedence; removing a setting from Nix does not
-        remove it from the existing file. Arrays are replaced.
+        Declarative values take precedence. Arrays are replaced.
+
+        With [](#opt-home.mutableSettings.removeDropped), settings removed from
+        the configuration are removed from the file unless alistral has changed
+        them since. The MusicBrainz server, its rate limit and Subsonic clients
+        are removed whole, with what alistral added to them, or kept whole if a
+        declared value changed; list entries alistral added are kept.
 
         Formatting is not preserved. Keep secrets out of {option}`settings`,
         since its values are still copied to the world-readable Nix store.
@@ -63,16 +68,46 @@ in
   config = mkIf cfg.enable {
     home = {
       activation = {
-        alistralMutableSettings = lib.mkIf (cfg.mutableSettings && cfg.settings != { }) (
+        alistralMutableSettings = lib.mkIf cfg.mutableSettings (
           lib.hm.dag.entryAfter [ "linkGeneration" ] (
             lib.hm.generators.mkImpureConfigMerger {
               inherit pkgs;
               format = "json";
               empty = builtins.toJSON { tokens = { }; };
-              jqOperation = "$dynamic * $static";
+              # alistral cannot load a file without `tokens`, which removing
+              # the last declared token would otherwise delete.
+              jqOperation = "($dynamic * $static) | .tokens //= {}";
               path = settingsPath;
               staticSettings = jsonFormat.generate "alistral-mutable-settings" cfg.settings;
               mode = "600";
+              removal = {
+                enable = config.home.mutableSettings.removeDropped;
+                # alistral cannot load a server, rate limit or Subsonic client
+                # that has lost one of its declared keys.
+                atomic = [
+                  [ "musicbrainz_server" ]
+                  [
+                    "musicbrainz_server"
+                    "ratelimit"
+                  ]
+                ];
+                maps = [
+                  {
+                    path = [
+                      "interzic"
+                      "subsonic_clients"
+                    ];
+                    keys = [ "name" ];
+                    atomic = true;
+                  }
+                ];
+                sets = [
+                  [
+                    "mapper"
+                    "backlisted"
+                  ]
+                ];
+              };
             }
           )
         );
