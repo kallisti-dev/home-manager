@@ -62,6 +62,13 @@ in
           <https://github.com/jellyfin/jellyfin-mpv-shim#configuration>
           for the configuration documentation.
 
+          The settings are merged into the file at activation, as
+          jellyfin-mpv-shim must be able to write it. With
+          [](#opt-home.mutableSettings.removeDropped), settings removed from
+          the configuration are removed from the file unless jellyfin-mpv-shim
+          has changed them since. `config_version` is kept, as the shim would
+          otherwise run its configuration migrations again.
+
           Changed settings trigger a service restart when automatic systemd
           service switching is enabled. A running shim can write its old
           in-memory settings back between the merge and restart. Stop it before
@@ -141,16 +148,23 @@ in
     # jellyfin-mpv-shim can't load the configuration file if it's not
     # writable. So we merge the settings defined here in Nix with the existing
     # configuration, if any.
-    home.activation.jellyfinMpvShimSettingsActivation = lib.mkIf (cfg.settings != { }) (
-      lib.hm.dag.entryBetween [ "reloadSystemd" ] [ "linkGeneration" ] (
-        lib.hm.generators.mkImpureConfigMerger {
-          inherit pkgs staticSettings;
-          format = "json";
-          empty = "{}";
-          jqOperation = "$dynamic * $static";
-          path = "${config.xdg.configHome}/jellyfin-mpv-shim/conf.json";
-        }
-      )
-    );
+    home.activation.jellyfinMpvShimSettingsActivation =
+      lib.hm.dag.entryBetween [ "reloadSystemd" ] [ "linkGeneration" ]
+        (
+          lib.hm.generators.mkImpureConfigMerger {
+            inherit pkgs staticSettings;
+            format = "json";
+            empty = "{}";
+            jqOperation = "$dynamic * $static";
+            path = "${config.xdg.configHome}/jellyfin-mpv-shim/conf.json";
+            removal = {
+              enable = config.home.mutableSettings.removeDropped;
+              # Without `config_version`, the shim runs its configuration
+              # migrations again, which reset settings and can replace the
+              # linked input.conf with a regular file.
+              keep = [ [ "config_version" ] ];
+            };
+          }
+        );
   };
 }

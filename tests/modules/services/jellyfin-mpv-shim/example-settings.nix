@@ -16,6 +16,10 @@ let
     empty = "{}";
     jqOperation = "$dynamic * $static";
     path = "${config.xdg.configHome}/jellyfin-mpv-shim/conf.json";
+    removal = {
+      enable = config.home.mutableSettings.removeDropped;
+      keep = [ [ "config_version" ] ];
+    };
   };
 
 in
