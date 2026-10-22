@@ -29,6 +29,35 @@ let
   userSettings = removeAttrs cfg.settings trustedFolderKeys;
   settingsFile = jsonFormat.generate "github-copilot-cli-settings.json" userSettings;
 
+  # Copilot CLI adds and removes single entries of these lists, for example
+  # with `copilot config [--rm] <list> <entry>`.
+  settingsSets = map (lib.splitString ".") [
+    "allowedUrls"
+    "companyAnnouncements"
+    "deniedUrls"
+    "disabledHooks"
+    "disabledMcpServers"
+    "disabledSkills"
+    "enabledMcpServers"
+    "extensions.disabledExtensions"
+    "feature_flags.enabled"
+    "githubMcpTools"
+    "githubMcpToolsets"
+    "ignoredSkillsLocations"
+    "permissions.allow"
+    "permissions.ask"
+    "permissions.deny"
+    "sandbox.credentials.envVars.*.injectHosts"
+    "sandbox.userPolicy.filesystem.deniedPaths"
+    "sandbox.userPolicy.filesystem.readonlyPaths"
+    "sandbox.userPolicy.filesystem.readwritePaths"
+    "sandbox.userPolicy.network.allowedHosts"
+    "sandbox.userPolicy.network.blockedHosts"
+    "skillDirectories"
+    "subagents.disabledSubagents"
+    "tabs.hide"
+  ];
+
   upstreamConfigDir = "${config.home.homeDirectory}/.copilot";
 
   # Applied after transformMcpServer so that args = [] is not filtered out.
@@ -177,7 +206,7 @@ in
         Configuration written to {file}`settings.json` inside
         {option}`programs.github-copilot-cli.configDir`. See
         [](#opt-programs.github-copilot-cli.mutableSettings) for how the file
-        is managed. Empty settings leave the file unmanaged.
+        is managed. Without settings, no file is linked or created.
 
         Trusted folders (`trusted_folders`, `trustedFolders`) are not user
         settings: Copilot CLI keeps them in its own state, so they are left
@@ -221,12 +250,17 @@ in
         the link, causing a collision on the next activation.
 
         When enabled, declared values take precedence over existing values,
-        keys later removed from [](#opt-programs.github-copilot-cli.settings)
-        stay in the file, and comments and formatting are not preserved.
+        and comments and formatting are not preserved.
+
+        With [](#opt-home.mutableSettings.removeDropped), settings removed
+        from the configuration are removed from the file unless Copilot CLI
+        has changed them since. Marketplace entries are removed whole, with
+        what Copilot CLI added to them, or kept whole if a declared value
+        changed; list entries Copilot CLI added are kept.
+
         Turning the option off links the file again. A merged file is replaced
         automatically only when it is byte-identical to the declared settings.
         Other files are left to the normal collision and backup handling.
-        If the remaining settings are empty, the file is left unmanaged.
       '';
     };
 
@@ -242,8 +276,10 @@ in
         {option}`programs.github-copilot-cli.configDir`, which it also uses for
         login and plugin state. These folders are merged into its
         `trustedFolders` list at activation, and the rest of the file is left
-        alone. Folders trusted from inside Copilot CLI are kept, and removing a
-        folder here does not untrust it.
+        alone. Folders trusted from inside Copilot CLI are kept. With
+        [](#opt-home.mutableSettings.removeDropped), removing a folder here
+        untrusts it, even if it was also trusted from inside Copilot CLI, so
+        Copilot CLI asks again.
       '';
     };
 
@@ -472,30 +508,36 @@ in
       its own state; use programs.github-copilot-cli.trustedFolders instead.
     '';
 
-    home.activation.githubCopilotCliTrustedFolders = mkIf (cfg.trustedFolders != [ ]) (
-      lib.hm.dag.entryAfter [ "linkGeneration" ] (
-        lib.hm.generators.mkImpureConfigMerger {
-          inherit pkgs;
-          format = "json";
-          empty = "{}";
-          jqOperation = ''
+    home.activation.githubCopilotCliTrustedFolders = lib.hm.dag.entryAfter [ "linkGeneration" ] (
+      lib.hm.generators.mkImpureConfigMerger {
+        inherit pkgs;
+        format = "json";
+        empty = "{}";
+        jqOperation = ''
+          if $static | has("trustedFolders") then
             $dynamic + {
               trustedFolders: (($dynamic.trustedFolders // [ ]) as $have | $have + ($static.trustedFolders - $have))
             }
-          '';
-          path = "${cfg.configDir}/config.json";
-          staticSettings = jsonFormat.generate "github-copilot-cli-trusted-folders.json" {
-            inherit (cfg) trustedFolders;
-          };
-          # Copilot CLI starts config.json with a comment header.
-          reader = "${lib.getExe json5} --as-json";
-          mode = "600";
-          verboseMsg = "Adding trusted folders to ${cfg.configDir}/config.json";
-        }
-      )
+          else
+            $dynamic
+          end
+        '';
+        path = "${cfg.configDir}/config.json";
+        staticSettings = jsonFormat.generate "github-copilot-cli-trusted-folders.json" (
+          lib.optionalAttrs (cfg.trustedFolders != [ ]) { inherit (cfg) trustedFolders; }
+        );
+        # Copilot CLI starts config.json with a comment header.
+        reader = "${lib.getExe json5} --as-json";
+        mode = "600";
+        verboseMsg = "Merging trusted folders into ${cfg.configDir}/config.json";
+        removal = {
+          enable = config.home.mutableSettings.removeDropped;
+          sets = [ [ "trustedFolders" ] ];
+        };
+      }
     );
 
-    home.activation.githubCopilotCliSettings = mkIf (cfg.mutableSettings && userSettings != { }) (
+    home.activation.githubCopilotCliSettings = mkIf cfg.mutableSettings (
       lib.hm.dag.entryAfter [ "linkGeneration" ] (
         lib.hm.generators.mkImpureConfigMerger {
           inherit pkgs;
@@ -505,6 +547,17 @@ in
           path = "${cfg.configDir}/settings.json";
           staticSettings = settingsFile;
           reader = "${lib.getExe json5} --as-json";
+          removal = {
+            enable = config.home.mutableSettings.removeDropped;
+            # Copilot CLI requires `source` in a marketplace entry.
+            atomic = [
+              [
+                "extraKnownMarketplaces"
+                "*"
+              ]
+            ];
+            sets = settingsSets;
+          };
         }
       )
     );

@@ -20,7 +20,6 @@
 
   nmt.script =
     assert !(config.home.activation ? githubCopilotCliSettings);
-    assert !(config.home.activation ? githubCopilotCliTrustedFolders);
     assert !(config.home.activation ? githubCopilotCliImmutableSettings);
     ''
       assertFileExists home-files/.copilot/mcp-config.json

@@ -8,6 +8,7 @@
   github-copilot-cli-mcp = ./mcp.nix;
   github-copilot-cli-mcp-integration = ./mcp-integration.nix;
   github-copilot-cli-mutable-empty-settings = import ./settings-wiring.nix "mutable-empty";
+  github-copilot-cli-mutable-removal = ./mutable-removal.nix;
   github-copilot-cli-mutable-settings = ./mutable-settings.nix;
   github-copilot-cli-path-not-directory = ./path-not-directory.nix;
   github-copilot-cli-store-path-dir = ./store-path-dir.nix;

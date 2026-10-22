@@ -30,8 +30,8 @@ in
   ];
 
   nmt.script =
-    assert !(config.home.activation ? githubCopilotCliSettings);
-    assert !(config.home.activation ? githubCopilotCliTrustedFolders);
+    assert (config.home.activation ? githubCopilotCliSettings) == (mode == "mutable-empty");
+    assert (config.home.activation ? githubCopilotCliTrustedFolders) == (mode != "disabled");
     assert (cleanup != null) == redirected;
     assert !redirected || cleanup.after == [ "writeBoundary" ];
     assert !redirected || cleanup.before == [ "linkGeneration" ];
