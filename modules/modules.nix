@@ -39,6 +39,7 @@ let
       ./misc/gtk
       ./misc/lib.nix
       ./misc/mozilla-messaging-hosts.nix
+      ./misc/mutable-settings.nix
       ./misc/news
       ./misc/nix
       ./misc/numlock.nix

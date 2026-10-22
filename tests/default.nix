@@ -197,6 +197,7 @@ import nmtSrc {
           ./modules/home-environment
           ./modules/misc/fontconfig
           ./modules/misc/manual
+          ./modules/misc/mutable-settings
           ./modules/misc/news
           ./modules/misc/nix
           ./modules/misc/nixpkgs-disabled
