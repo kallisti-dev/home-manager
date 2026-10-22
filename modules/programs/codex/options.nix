@@ -32,6 +32,12 @@ in
         file during activation, preserving settings added by Codex or the user.
         Declared values take precedence. Only supported for Codex 0.2.0 and
         later. The default keeps the configuration file immutable.
+
+        With [](#opt-home.mutableSettings.removeDropped), settings removed
+        from the configuration are removed from the file unless Codex has
+        changed them since. MCP servers are removed whole, with what Codex
+        added to them, or kept whole if a declared value changed; list
+        entries Codex added are kept.
       '';
     };
 

@@ -171,6 +171,27 @@ in
         path = settingsPath;
         staticSettings = settingsSource;
         mode = "600";
+        removal = {
+          enable = config.home.mutableSettings.removeDropped;
+          # Codex refuses to start once a server has neither `command` nor
+          # `url`, for example when only a tool approval it added is left.
+          atomic = [
+            [
+              "mcp_servers"
+              "*"
+            ]
+          ];
+          sets = [
+            [
+              "skills"
+              "config"
+            ]
+            [
+              "tool_suggest"
+              "disabled_tools"
+            ]
+          ];
+        };
       };
 
       pluginMarketplace = {
@@ -328,7 +349,7 @@ in
       home = {
         packages = mkIf (cfg.package != null) [ cfg.package ];
 
-        activation.codexMutableSettings = lib.mkIf (cfg.mutableSettings && mergedSettings != { }) (
+        activation.codexMutableSettings = lib.mkIf cfg.mutableSettings (
           lib.hm.dag.entryAfter [ "linkGeneration" ] mutableSettingsActivation
         );
 
