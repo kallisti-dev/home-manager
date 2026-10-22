@@ -112,9 +112,12 @@ in
       description = ''
         Settings merged into the writable
         {file}`$XDG_CONFIG_HOME/joplin-desktop/settings.json` during activation.
-        Settings not configured here are preserved. If no settings remain after
-        omitting top-level null values and empty strings, activation leaves
-        the file untouched and does not create it.
+        Settings Joplin adds are preserved. With
+        [](#opt-home.mutableSettings.removeDropped), settings removed from the
+        configuration are removed from the file unless Joplin has changed them
+        since, each top-level setting as a whole. If no settings remain after
+        omitting top-level null values and empty strings, activation does not
+        create the file.
 
         Dotted names such as `"sync.interval"` are literal JSON keys.
         Sync targets and intervals use Joplin's numeric values. For example,
@@ -122,9 +125,10 @@ in
         Target `0` disables sync and interval `0` disables automatic sync.
 
         Top-level null values and empty strings are omitted, leaving existing
-        application settings unchanged. False, zero, empty lists, and empty
-        objects are written. Deprecated editor and sync options supply
-        compatibility defaults that explicit settings can override.
+        application settings unchanged; a previously declared setting set to
+        null or an empty string counts as removed. False, zero, empty lists,
+        and empty objects are written. Deprecated editor and sync options
+        supply compatibility defaults that explicit settings can override.
       '';
     };
   };
@@ -138,17 +142,20 @@ in
         configPath = "${config.xdg.configHome}/joplin-desktop/settings.json";
         newConfig = jsonFormat.generate "joplin-settings.json" settings;
       in
-      lib.mkIf (settings != { }) (
-        lib.hm.dag.entryAfter [ "linkGeneration" ] (
-          lib.hm.generators.mkImpureConfigMerger {
-            inherit pkgs;
-            format = "json";
-            empty = "{}";
-            jqOperation = "$dynamic + $static";
-            path = configPath;
-            staticSettings = newConfig;
-          }
-        )
+      lib.hm.dag.entryAfter [ "linkGeneration" ] (
+        lib.hm.generators.mkImpureConfigMerger {
+          inherit pkgs;
+          format = "json";
+          empty = "{}";
+          jqOperation = "$dynamic + $static";
+          path = configPath;
+          staticSettings = newConfig;
+          removal = {
+            enable = config.home.mutableSettings.removeDropped;
+            # Top-level values are removed whole, as `+` replaces them whole.
+            atomic = [ [ "*" ] ];
+          };
+        }
       );
   };
 }

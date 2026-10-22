@@ -2,6 +2,7 @@
   config,
   lib,
   options,
+  pkgs,
   ...
 }:
 {
@@ -19,7 +20,9 @@
   nmt.script =
     assert config.programs.joplin-desktop.general.editor == null;
     ''
-      assertFileNotRegex activate 'activateJoplinDesktopConfig|joplin-settings.json'
+      generated="$(grep -o '/nix/store/[^ ]*-joplin-settings.json' $TESTED/activate)"
+      ${pkgs.jq}/bin/jq -e '. == {}' "$generated" > /dev/null \
+        || fail "Expected no settings, got $(cat "$generated")"
       assertPathNotExists home-files/.config/joplin-desktop/settings.json
     '';
 }

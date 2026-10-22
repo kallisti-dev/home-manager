@@ -8,4 +8,5 @@
   joplin-desktop-extra-config-root-force = ./extra-config-root-force.nix;
   joplin-desktop-legacy-unset = ./legacy-unset.nix;
   joplin-desktop-root-force = ./root-force.nix;
+  joplin-desktop-removal = ./removal.nix;
 }
