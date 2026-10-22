@@ -36,9 +36,14 @@ in
       description = ''
         Merge declarative settings into a writable configuration file during
         activation, preserving settings and credentials written by the application.
-        Declarative values take precedence; removing a setting from Nix does not
-        remove it from the existing file. Arrays are replaced, except that
+        Declarative values take precedence. Arrays are replaced, except that
         `followList` entries are combined and deduplicated.
+
+        With [](#opt-home.mutableSettings.removeDropped), settings removed from
+        the configuration are removed from the file unless algia has changed
+        them since. Relays and the `delegation` are removed whole, with what
+        algia added to them, or kept whole if a declared value changed;
+        `privatekey` is never removed.
 
         Formatting is not preserved. Keep secrets out of {option}`settings`,
         since its values are still copied to the world-readable Nix store.
@@ -75,7 +80,7 @@ in
   config = mkIf cfg.enable {
     home = {
       activation = {
-        algiaMutableSettings = lib.mkIf (cfg.mutableSettings && cfg.settings != { }) (
+        algiaMutableSettings = lib.mkIf cfg.mutableSettings (
           lib.hm.dag.entryAfter [ "linkGeneration" ] (
             lib.hm.generators.mkImpureConfigMerger {
               inherit pkgs;
@@ -92,6 +97,23 @@ in
               path = configPath;
               staticSettings = jsonFormat.generate "algia-mutable-settings" cfg.settings;
               mode = "600";
+              removal = {
+                enable = config.home.mutableSettings.removeDropped;
+                # A relay left with only the flags algia added is never used,
+                # yet stops algia from falling back to its default relay. A
+                # delegation is invalid without any of its declared values.
+                atomic = [
+                  [
+                    "relays"
+                    "*"
+                  ]
+                  [ "delegation" ]
+                ];
+                # The settings description suggests moving the key into the
+                # writable file, which removing its declaration must not undo.
+                keep = [ [ "privatekey" ] ];
+                sets = [ [ "followList" ] ];
+              };
             }
           )
         );
