@@ -42,8 +42,8 @@ in
       message = "Mutable Herdr settings must not register immutable cleanup.";
     }
     {
-      assertion = lib.hasSuffix "run ${herdrBin} server reload-config || true\n" activation.data;
-      message = "Mutable Herdr settings must reload after merging, using the configured executable.";
+      assertion = lib.hasInfix "run ${herdrBin} server reload-config || true\n" activation.data;
+      message = "Mutable Herdr settings must reload using the configured executable.";
     }
     {
       assertion = lib.elem pkgs.herdr config.home.packages == withPackage;

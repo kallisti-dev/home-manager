@@ -28,6 +28,7 @@ let
     path = settingsPath;
     staticSettings = settingsSource;
     mode = "600";
+    removal.enable = config.home.mutableSettings.removeDropped;
   };
 
   herdrBin = if cfg.package == null then "herdr" else lib.escapeShellArg (lib.getExe cfg.package);
@@ -48,10 +49,11 @@ in
       description = ''
         Whether to merge declared settings into a writable Herdr configuration
         file during activation, preserving settings added by Herdr or the user.
-        Declared values, including arrays, take precedence. Removing a
-        declaration does not remove it from the file. Comments and formatting
-        are not preserved. New files have mode 0600; existing files retain
-        their permissions.
+        Declared values, including arrays, take precedence. With
+        [](#opt-home.mutableSettings.removeDropped), settings removed from the
+        configuration are removed from the file unless Herdr has changed them
+        since. Comments and formatting are not preserved. New files have mode
+        0600; existing files retain their permissions.
 
         The default keeps the configuration file immutable. Switching back to
         immutable settings automatically replaces the writable file only when
@@ -104,13 +106,18 @@ in
     home = {
       packages = mkIf (cfg.package != null) [ cfg.package ];
 
-      activation.herdrMutableSettings = lib.mkIf (cfg.mutableSettings && cfg.settings != { }) (
-        lib.hm.dag.entryAfter [ "linkGeneration" ] (
-          mutableSettingsActivation
-          + ''
-            run ${reloadConfig}
-          ''
-        )
+      # Reload only when the merge changed the file, like `onChange` does for
+      # the linked file, as the merge also runs while no settings are declared.
+      activation.herdrMutableSettings = lib.mkIf cfg.mutableSettings (
+        lib.hm.dag.entryAfter [ "linkGeneration" ] ''
+          (
+            before="$(cat -- ${lib.escapeShellArg settingsPath} 2> /dev/null || true)"
+            ${mutableSettingsActivation}
+            if [[ "$(cat -- ${lib.escapeShellArg settingsPath} 2> /dev/null || true)" != "$before" ]]; then
+              run ${reloadConfig}
+            fi
+          )
+        ''
       );
 
       activation.herdrImmutableSettings = lib.mkIf (!cfg.mutableSettings && cfg.settings != { }) (
