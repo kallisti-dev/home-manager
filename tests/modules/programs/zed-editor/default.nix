@@ -20,5 +20,6 @@
   zed-debug = ./debug.nix;
   zed-debug-immutable = ./debug-immutable.nix;
   zed-debug-empty = ./debug-empty.nix;
+  zed-removal = ./removal.nix;
   zed-themes = ./themes;
 }

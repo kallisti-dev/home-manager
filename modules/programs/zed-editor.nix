@@ -64,6 +64,30 @@ let
     }
   ) (lib.attrNames (lib.filterAttrs (_: lib.id) immutableFiles));
 
+  modelSelections = [
+    "default_model"
+    "subagent_model"
+    "inline_assistant_model"
+    "commit_message_model"
+    "thread_summary_model"
+    "compaction_model"
+  ];
+  toolRules = [
+    "always_allow"
+    "always_deny"
+    "always_confirm"
+  ];
+  labelledEntries = {
+    enable = config.home.mutableSettings.removeDropped;
+    maps = [
+      {
+        path = [ ];
+        keys = [ "label" ];
+        atomic = true;
+      }
+    ];
+  };
+
   editorEnv = {
     EDITOR = "${cfg.package.meta.mainProgram} --wait";
     VISUAL = "${cfg.package.meta.mainProgram} --wait";
@@ -94,6 +118,14 @@ in
         example = false;
         description = ''
           Whether user settings (settings.json) can be updated by zed.
+
+          Declared settings are then merged into the file at activation. With
+          [](#opt-home.mutableSettings.removeDropped), settings removed from
+          the configuration are removed from the file unless Zed has changed
+          them since. Themes, agent profiles and servers, model selections,
+          context servers and the terminal shell are removed whole, with what
+          Zed added to them, or kept whole if Zed changed a declared value;
+          list entries Zed added are kept.
         '';
       };
 
@@ -103,6 +135,12 @@ in
         example = false;
         description = ''
           Whether user keymaps (keymap.json) can be updated by zed.
+
+          Declared keymaps are then merged into the file at activation, by
+          context. With [](#opt-home.mutableSettings.removeDropped), bindings
+          removed from the configuration are removed from the file unless Zed
+          has changed them since, and a context left without bindings is
+          removed.
         '';
       };
 
@@ -112,6 +150,11 @@ in
         example = false;
         description = ''
           Whether user tasks (tasks.json) can be updated by zed.
+
+          Declared tasks are then merged into the file at activation, by label.
+          With [](#opt-home.mutableSettings.removeDropped), a task removed from
+          the configuration is removed from the file unless one of its declared
+          values has changed since.
         '';
       };
 
@@ -121,6 +164,11 @@ in
         example = false;
         description = ''
           Whether user debug configurations (debug.json) can be updated by zed.
+
+          Declared configurations are then merged into the file at activation,
+          by label. With [](#opt-home.mutableSettings.removeDropped), a
+          configuration removed from the Home Manager configuration is removed
+          from the file unless one of its declared values has changed since.
         '';
       };
 
@@ -319,20 +367,102 @@ in
           lib.hm.dag.entryBetween [ "linkGeneration" ] [ "writeBoundary" ]
             immutableConfigCleanup;
       })
-      (mkIf (cfg.mutableUserSettings && mergedSettings != { }) {
+      (mkIf cfg.mutableUserSettings {
         zedSettingsActivation = lib.hm.dag.entryAfter [ "linkGeneration" ] (
           lib.hm.generators.mkImpureConfigMerger {
             inherit pkgs;
             format = "json";
             empty = "{}";
-            jqOperation = "$dynamic * $static";
+            # Zed records the profile picked in it as the default, which must
+            # not outlive a profile removed from the configuration.
+            jqOperation = ''
+              ($dynamic * $static)
+              | (.agent.default_profile? // null) as $profile
+              | if ($profile | type) == "string"
+                  and (any("write", "ask", "minimal"; . == $profile) | not)
+                  and ($previous.agent.profiles? // {} | has($profile))
+                  and (.agent.profiles? // {} | has($profile) | not)
+                then
+                  del(.agent.default_profile) | if .agent == {} then del(.agent) else . end
+                else
+                  .
+                end
+            '';
             path = "${config.xdg.configHome}/zed/settings.json";
             staticSettings = jsonFormat.generate "zed-user-settings" mergedSettings;
             reader = "${lib.getExe json5} --as-json";
+            removal = {
+              enable = config.home.mutableSettings.removeDropped;
+              # Zed rejects these without their declared keys, for example a
+              # profile without `name`, a model without `provider` or a theme
+              # with only one of `light` and `dark`; a context server left
+              # with only `enabled` is taken for an extension's and never
+              # starts.
+              atomic =
+                map (key: [
+                  "agent"
+                  key
+                ]) modelSelections
+                ++ [
+                  [ "theme" ]
+                  [ "icon_theme" ]
+                  [
+                    "agent"
+                    "profiles"
+                    "*"
+                  ]
+                  [
+                    "agent"
+                    "profiles"
+                    "*"
+                    "default_model"
+                  ]
+                  [
+                    "agent_servers"
+                    "*"
+                  ]
+                  [
+                    "context_servers"
+                    "*"
+                  ]
+                  [
+                    "terminal"
+                    "shell"
+                  ]
+                ];
+              sets = [
+                [ "ssh_connections" ]
+                [
+                  "agent"
+                  "favorite_models"
+                ]
+                [
+                  "agent"
+                  "inline_alternatives"
+                ]
+                [
+                  "agent"
+                  "sandbox_permissions"
+                  "network_hosts"
+                ]
+                [
+                  "agent"
+                  "sandbox_permissions"
+                  "write_paths"
+                ]
+              ]
+              ++ map (rules: [
+                "agent"
+                "tool_permissions"
+                "tools"
+                "*"
+                rules
+              ]) toolRules;
+            };
           }
         );
       })
-      (mkIf (cfg.mutableUserKeymaps && cfg.userKeymaps != [ ]) {
+      (mkIf cfg.mutableUserKeymaps {
         zedKeymapActivation = lib.hm.dag.entryAfter [ "linkGeneration" ] (
           lib.hm.generators.mkImpureConfigMerger {
             inherit pkgs;
@@ -342,10 +472,19 @@ in
             path = "${config.xdg.configHome}/zed/keymap.json";
             staticSettings = jsonFormat.generate "zed-user-keymaps" cfg.userKeymaps;
             reader = "${lib.getExe json5} --as-json";
+            removal = {
+              enable = config.home.mutableSettings.removeDropped;
+              maps = [
+                {
+                  path = [ ];
+                  keys = [ "context" ];
+                }
+              ];
+            };
           }
         );
       })
-      (mkIf (cfg.mutableUserTasks && cfg.userTasks != [ ]) {
+      (mkIf cfg.mutableUserTasks {
         zedTasksActivation = lib.hm.dag.entryAfter [ "linkGeneration" ] (
           lib.hm.generators.mkImpureConfigMerger {
             inherit pkgs;
@@ -355,10 +494,11 @@ in
             path = "${config.xdg.configHome}/zed/tasks.json";
             staticSettings = jsonFormat.generate "zed-user-tasks" cfg.userTasks;
             reader = "${lib.getExe json5} --as-json";
+            removal = labelledEntries;
           }
         );
       })
-      (mkIf (cfg.mutableUserDebug && cfg.userDebug != [ ]) {
+      (mkIf cfg.mutableUserDebug {
         zedDebugActivation = lib.hm.dag.entryAfter [ "linkGeneration" ] (
           lib.hm.generators.mkImpureConfigMerger {
             inherit pkgs;
@@ -368,6 +508,7 @@ in
             path = "${config.xdg.configHome}/zed/debug.json";
             staticSettings = jsonFormat.generate "zed-user-debug" cfg.userDebug;
             reader = "${lib.getExe json5} --as-json";
+            removal = labelledEntries;
           }
         );
       })
