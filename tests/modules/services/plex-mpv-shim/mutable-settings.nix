@@ -32,6 +32,7 @@
           jqOperation = "$dynamic * $static";
           path = configPath;
           staticSettings = (pkgs.formats.json { }).generate "plex-mpv-shim-conf.json" cfg.settings;
+          removal.enable = config.home.mutableSettings.removeDropped;
         };
     assert builtins.elem "linkGeneration" config.home.activation.plexMpvShimSettingsActivation.after;
     assert builtins.elem "reloadSystemd" config.home.activation.plexMpvShimSettingsActivation.before;
