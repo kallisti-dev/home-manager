@@ -42,8 +42,8 @@ in
       message = "Colima mutable settings must merge after linking.";
     }
     {
-      assertion = !(config.home.activation ? colima-emptyMutableSettings);
-      message = "Empty Colima profiles must not create mutable activation.";
+      assertion = config.home.activation ? colima-emptyMutableSettings;
+      message = "Empty mutable Colima profiles must still merge, so dropped settings are removed.";
     }
     {
       assertion = !cfg.profiles.immutable.mutableSettings;
@@ -67,7 +67,7 @@ in
   ];
   nmt.script = ''
     assertFileContent "home-files/custom-colima/immutable/colima.yaml" ${./immutable-settings.yaml}
-    generated="$(grep -o '/nix/store/[^ ]*-colima.yaml' "$TESTED/activate")" \
+    generated="$(grep -o '/nix/store/[^ ]*-colima.yaml' ${pkgs.writeText "activation" activation.data})" \
       || fail "Missing colima.yaml input in activation"
     assertFileContent "$generated" ${./mutable-input.yaml}
     assertFileContains activate '${config.home.homeDirectory}/custom-colima/writable/colima.yaml'

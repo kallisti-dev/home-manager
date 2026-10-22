@@ -163,8 +163,13 @@ in
                 description = ''
                   Whether to merge settings into a writable configuration file during
                   activation. Settings declared here take precedence; other settings are
-                  preserved. Removing a setting here does not remove it from the file.
-                  Comments and formatting are not preserved.
+                  preserved. Comments and formatting are not preserved.
+
+                  With [](#opt-home.mutableSettings.removeDropped), settings removed from
+                  the configuration are removed from the file unless Colima has changed
+                  them since. `runtime` is kept, as Colima ignores a file without it.
+                  Removing the profile leaves its file as it is, as does disabling the
+                  module.
 
                   This does not change the service's save-config flag. When switching
                   back to immutable settings, existing files use Home Manager's normal
@@ -243,6 +248,11 @@ in
         else
           null;
       dockerHostProfile = lib.findFirst (p: p.setDockerHost) null (lib.attrValues cfg.profiles);
+      # Profiles linked from the store instead of merged. The cleanup reads
+      # the matching file entries, so both must use this condition.
+      immutableProfiles = lib.filterAttrs (
+        _: profile: !profile.mutableSettings && profile.settings != { }
+      ) cfg.profiles;
     in
     lib.mkIf cfg.enable {
       assertions = [
@@ -253,33 +263,50 @@ in
       ];
 
       home = {
-        activation = lib.mapAttrs' (
-          name: profile:
-          lib.nameValuePair "colima-${name}MutableSettings" (
-            lib.hm.dag.entryAfter [ "linkGeneration" ] (
-              lib.hm.generators.mkImpureConfigMerger {
-                inherit pkgs;
-                format = "yaml";
-                empty = "{}";
-                jqOperation = "$dynamic * $static";
-                path = "${colimaHome}/${name}/colima.yaml";
-                staticSettings = yamlFormat.generate "colima.yaml" profile.settings;
-                mode = "600";
-              }
+        activation =
+          lib.mapAttrs' (
+            name: profile:
+            lib.nameValuePair "colima-${name}MutableSettings" (
+              lib.hm.dag.entryAfter [ "linkGeneration" ] (
+                lib.hm.generators.mkImpureConfigMerger {
+                  inherit pkgs;
+                  format = "yaml";
+                  empty = "{}";
+                  jqOperation = "$dynamic * $static";
+                  path = "${colimaHome}/${name}/colima.yaml";
+                  staticSettings = yamlFormat.generate "colima.yaml" profile.settings;
+                  mode = "600";
+                  removal = {
+                    enable = config.home.mutableSettings.removeDropped;
+                    # Colima treats a file without `runtime` as empty and
+                    # ignores every other setting in it.
+                    keep = [ [ "runtime" ] ];
+                  };
+                }
+              )
             )
-          )
-        ) (lib.filterAttrs (_: profile: profile.mutableSettings && profile.settings != { }) cfg.profiles);
+          ) (lib.filterAttrs (_: profile: profile.mutableSettings) cfg.profiles)
+          // {
+            colimaImmutableSettings = lib.mkIf (immutableProfiles != { }) (
+              lib.hm.dag.entryBetween [ "linkGeneration" ] [ "writeBoundary" ] (
+                lib.concatMapStrings (
+                  name:
+                  lib.hm.generators.mkImpureConfigCleanup {
+                    file = config.home.file."${cfg.colimaHomeDir}/${name}/colima.yaml";
+                  }
+                ) (lib.attrNames immutableProfiles)
+              )
+            );
+          };
 
         packages = lib.mkIf (cfg.package != null) [ cfg.package ];
 
         file = lib.mkMerge (
-          lib.mapAttrsToList
-            (profileName: profile: {
-              "${cfg.colimaHomeDir}/${profileName}/colima.yaml" = {
-                source = yamlFormat.generate "colima.yaml" profile.settings;
-              };
-            })
-            (lib.filterAttrs (_name: profile: !profile.mutableSettings && profile.settings != { }) cfg.profiles)
+          lib.mapAttrsToList (profileName: profile: {
+            "${cfg.colimaHomeDir}/${profileName}/colima.yaml" = {
+              source = yamlFormat.generate "colima.yaml" profile.settings;
+            };
+          }) immutableProfiles
         );
 
         sessionVariables = {

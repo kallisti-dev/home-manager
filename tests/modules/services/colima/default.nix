@@ -7,4 +7,5 @@
   colima-mutable-settings-xdg = ./mutable-settings-xdg.nix;
   colima-mutable-settings-custom = ./mutable-settings-custom.nix;
   colima-mutable-settings-disabled = ./mutable-settings-disabled.nix;
+  colima-mutable-settings-removal = ./mutable-settings-removal.nix;
 }
