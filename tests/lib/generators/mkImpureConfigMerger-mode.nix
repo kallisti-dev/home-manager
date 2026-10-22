@@ -39,6 +39,7 @@ let
 in
 {
   nmt.script = ''
+    export XDG_STATE_HOME="$TMPDIR/state"
     substitute ${defaultMode} "$TMPDIR/default-mode" --subst-var TMPDIR
     substitute ${privateMode} "$TMPDIR/private-mode" --subst-var TMPDIR
     chmod +x "$TMPDIR/default-mode" "$TMPDIR/private-mode"

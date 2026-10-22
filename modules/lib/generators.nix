@@ -190,6 +190,13 @@ let
           passAsFile = [ "value" ];
         } buildCommand;
     };
+
+  # Shell word for the record of the settings mkImpureConfigMerger last applied
+  # to a target, given the target's absolute path without its leading slash.
+  impureConfigRecordPath =
+    relativeTarget:
+    ''"''${hmStatePath:-''${XDG_STATE_HOME:-$HOME/.local/state}/home-manager}/mutable-settings/"''
+    + ''${relativeTarget}".json"'';
 in
 {
   /**
@@ -994,6 +1001,32 @@ in
     writable. A target that cannot be replaced by renaming, such as a
     bind-mounted file, is written in place instead, without the atomicity.
 
+    After each successful write, the static settings are recorded under
+    `$XDG_STATE_HOME/home-manager/mutable-settings/`, at the target's
+    absolute path with `.json` appended, as `{"version": 1, "static": …}`.
+    Each target must be merged by a single call, as the record is keyed by
+    path. When `removal.enable` is set, values that were recorded but are no
+    longer declared are removed from `$dynamic` before `jqOperation` runs.
+    Nothing is removed until a record exists, and records are kept while
+    removal is disabled, so enabling it affects only settings dropped
+    afterwards. A record with another version, or none, is ignored for that
+    activation and then replaced, so a format change costs one removal pass
+    rather than a failed switch.
+
+    By default, non-empty objects are traversed and other values are leaves.
+    A leaf is removed only while it still equals the recorded value, so one
+    the application or user has changed since is kept, and an array is
+    removed only as a whole. An object is removed when the removal leaves it
+    empty, so keys the application added under it are kept. `removal` can
+    declare other rules for parts of the file whose entries the application
+    cannot read once some of their keys are gone, or whose arrays it extends.
+
+    When the static settings are an empty object or array, a target without
+    a record is left alone and not created. Otherwise the recorded settings
+    are removed if `removal.enable` is set and the target exists, and the
+    record is deleted. Modules should therefore keep calling the merger when
+    their settings become empty.
+
     The merge uses `jaq` internally to read and write JSON, YAML, TOML, and
     CBOR via its `--from`/`--to` flags. Comments and formatting are not
     preserved. YAML is written in block style with `---` and `...` document
@@ -1031,7 +1064,11 @@ in
       `jqOperation` (string)
       : jq-compatible expression that merges `$dynamic` (existing config) with
         `$static` (Nix-generated config). For example `"$dynamic * $static"`
-        for a recursive object merge.
+        for a recursive object merge. `$dynamic` has already had settings
+        that are no longer declared removed. `$static` is `{}` or `[]` when
+        a module's last setting has been removed. `$previous` holds the
+        recorded settings when `removal.enable` is set, or `null`, for
+        cleaning up what the application derived from removed settings.
 
       `path` (string)
       : Absolute path to the config file on disk.
@@ -1059,10 +1096,47 @@ in
       : Message to log when `$VERBOSE` is set. When `null` (the default), a
         generic message is used.
 
+      `removal` (attribute set; optional)
+      : How settings that are no longer declared are removed. Paths are lists
+        of keys, in which `"*"` matches any key, and `[ ]` is the whole file,
+        which counts as declared while any setting is. The rules apply only
+        to removal; `jqOperation` still decides how declared settings are
+        merged.
+
+        `enable` (boolean; default `false`)
+        : Whether to remove settings that are no longer declared. Modules
+          pass `config.home.mutableSettings.removeDropped`.
+
+        `atomic` (list of paths)
+        : Values removed or kept as a whole. Once a matching value is no
+          longer declared, it is removed together with keys the application
+          added to it, as long as none of the recorded values it still holds
+          has changed; otherwise it is kept whole. A recorded object replaced
+          by a value of another type counts as changed. Use this for entries
+          the application cannot read without their declared keys. For the
+          whole file, removal leaves the empty object or array.
+
+        `keep` (list of paths)
+        : Values that are never removed.
+
+        `sets` (list of paths, or of attribute sets with `path` and `keep`)
+        : Arrays whose elements are independent. Recorded elements that are no
+          longer declared are removed, and elements the application added are
+          kept. Elements listed in `keep`, such as a placeholder for the
+          application's defaults, are not removed while other elements
+          remain.
+
+        `maps` (list of attribute sets)
+        : Arrays of objects identified by the fields `keys`, at `path`. Within
+          an element, recorded values are removed as for an object, and the
+          key fields are kept; an element left with only its key fields is
+          removed. With `atomic = true`, an element that is no longer
+          declared is instead removed or kept as a whole, as for `atomic`.
+
     # Type
 
     ```
-    mkImpureConfigMerger :: { pkgs :: AttrSet; format :: String; empty :: String; jqOperation :: String; path :: String; staticSettings :: Path; mode ? NullOr String; reader ? NullOr String; verboseMsg ? NullOr String; } -> String
+    mkImpureConfigMerger :: { pkgs :: AttrSet; format :: String; empty :: String; jqOperation :: String; path :: String; staticSettings :: Path; mode ? NullOr String; reader ? NullOr String; verboseMsg ? NullOr String; removal ? AttrSet; } -> String
     ```
 
     # Examples
@@ -1096,8 +1170,32 @@ in
       mode ? null,
       reader ? null,
       verboseMsg ? null,
+      removal ? { },
     }:
     let
+      removal' = {
+        enable = false;
+        atomic = [ ];
+        keep = [ ];
+        sets = [ ];
+        maps = [ ];
+      }
+      // removal;
+      isPattern = pattern: builtins.isList pattern && lib.all builtins.isString pattern;
+      strategies = {
+        inherit (removal') atomic keep;
+        sets = map (
+          set:
+          if builtins.isList set then
+            {
+              path = set;
+              keep = [ ];
+            }
+          else
+            { keep = [ ]; } // set
+        ) removal'.sets;
+        maps = map (list: { atomic = false; } // list) removal'.maps;
+      };
       jaqBin = lib.getExe pkgs.jaq;
       coreutil = lib.getExe' pkgs.coreutils;
       isJson = format == "json";
@@ -1118,15 +1216,20 @@ in
           "printf '%s\\n' \"$config\" | ${jaqBin} --to ${format} '.' > \"$candidate_path\"";
       defaultVerboseMsg = "Merging Nix-generated config into ${path}";
       verboseMsg' = if verboseMsg != null then verboseMsg else defaultVerboseMsg;
-      # Pass both documents through files: Linux caps a single argument at
-      # 128 KiB, so `--argjson` fails with E2BIG on larger configs. The
-      # operation sits on its own line so a trailing `#` comment in it cannot
-      # comment out the closing parenthesis.
+      recordPath = impureConfigRecordPath ''"''${display_path#/}"'';
+      # The documents pass through files: Linux caps a single argument at
+      # 128 KiB, so `--argjson` fails with E2BIG on larger configs.
+      removeCmd = ''${jaqBin} -c -f ${./impure-config-removal.jq} --argjson rules ${lib.escapeShellArg (builtins.toJSON strategies)} --slurpfile previous <(printf '%s' "$previous") --slurpfile static <(printf '%s' "$static")'';
+      # The operation sits on its own line so a trailing `#` comment in it
+      # cannot comment out the closing parenthesis.
       mergeFilter = ''
-        if ($dynamic | length) != 1 or ($static | length) != 1 then
+        if ($dynamic | length) != 1 or ($static | length) != 1 or ($previous | length) > 1 then
           error("expected exactly one JSON value")
         else
-          $dynamic[0] as $dynamic | $static[0] as $static | (
+          $dynamic[0] as $dynamic
+          | $static[0] as $static
+          | $previous[0] as $previous
+          | (
             ${jqOperation}
           )
         end
@@ -1135,110 +1238,164 @@ in
     assert lib.assertMsg
       (mode == null || (builtins.isString mode && builtins.match "[0-7]{3,4}" mode != null))
       "mkImpureConfigMerger: mode must be an octal string such as \"600\", got ${builtins.toJSON mode}.";
+    assert lib.assertMsg
+      (
+        lib.all isPattern (removal'.atomic ++ removal'.keep)
+        && lib.all (set: isPattern set.path && builtins.isList set.keep) strategies.sets
+        && lib.all (list: isPattern list.path && isPattern list.keys && list.keys != [ ]) removal'.maps
+      )
+      "mkImpureConfigMerger: removal paths must be lists of strings, each of removal.sets a path or `{ path; keep; }`, and each of removal.maps needs `path` and non-empty `keys`.";
     ''
-      if [[ -v VERBOSE ]]; then
-        echo ${lib.escapeShellArg verboseMsg'}
-      fi
-      if [[ -v DRY_RUN ]]; then
-        echo ${lib.escapeShellArg "Would merge Nix-generated config into ${path}"}
-      else
-        (
-          display_path=${lib.escapeShellArg path}
-          settings_path="$display_path"
-          was_symlink=
-          if [[ -L "$display_path" ]]; then
-            was_symlink=1
-            if ! settings_path="$(${coreutil "readlink"} -f -- "$display_path")"; then
-              errorEcho "Cannot resolve config at '$display_path'; leaving the symlink unchanged."
-              exit 1
-            fi
-          fi
-          case "$settings_path" in
-            ${lib.escapeShellArg builtins.storeDir}/*)
-              errorEcho "Config at '$display_path' resolves into the Nix store; refusing to replace it."
-              exit 1
-              ;;
-          esac
+      (
+        display_path=${lib.escapeShellArg path}
+        record_path=${recordPath}
+        static_path=${lib.escapeShellArg staticSettings}
+        remove_dropped=${lib.optionalString removal'.enable "1"}
+        static_is_empty=
+        if ${jaqBin} --from ${format} -e '. == {} or . == []' "$static_path" > /dev/null; then
+          static_is_empty=1
+          # With nothing declared, only a recorded merge leaves anything to do.
+          [[ -e "$record_path" ]] || exit 0
+        fi
+        if [[ -v VERBOSE ]]; then
+          echo ${lib.escapeShellArg verboseMsg'}
+        fi
+        if [[ -v DRY_RUN ]]; then
+          echo ${lib.escapeShellArg "Would merge Nix-generated config into ${path}"}
+          exit 0
+        fi
+        if [[ -n "$static_is_empty" && ( -z "$remove_dropped" || ! -e "$display_path" ) ]]; then
+          rm -f -- "$record_path"
+          exit 0
+        fi
 
-          snapshot_dir=
+        settings_path="$display_path"
+        was_symlink=
+        if [[ -L "$display_path" ]]; then
+          was_symlink=1
+          if ! settings_path="$(${coreutil "readlink"} -f -- "$display_path")"; then
+            errorEcho "Cannot resolve config at '$display_path'; leaving the symlink unchanged."
+            exit 1
+          fi
+        fi
+        case "$settings_path" in
+          ${lib.escapeShellArg builtins.storeDir}/*)
+            errorEcho "Config at '$display_path' resolves into the Nix store; refusing to replace it."
+            exit 1
+            ;;
+        esac
+
+        snapshot_dir=
+        candidate_path=
+        record_candidate=
+        # Activation owns the outer EXIT trap; cleanup must stay in this subshell.
+        trap '
+          [[ -z "$snapshot_dir" ]] || rm -rf -- "$snapshot_dir"
+          [[ -z "$candidate_path" ]] || rm -f -- "$candidate_path"
+          [[ -z "$record_candidate" ]] || rm -f -- "$record_candidate"
+        ' EXIT
+
+        mkdir -p "$(dirname "$settings_path")"
+        snapshot_path=
+        input_path="$settings_path"
+        if [[ -e "$settings_path" ]]; then
+          # Keep the configured file name so a reader that detects the format
+          # from the extension still recognizes the snapshot, even when the
+          # path is a symlink to a differently named file.
+          snapshot_dir="$(${coreutil "mktemp"} -d "$settings_path.snapshot.XXXXXX")"
+          snapshot_path="$snapshot_dir/''${display_path##*/}"
+          ${coreutil "cp"} --preserve=mode -- "$settings_path" "$snapshot_path"
+          input_path="$snapshot_path"
+        fi
+
+        # A missing or empty file is treated as `empty`, but an existing file
+        # that fails to parse must fail activation instead of being replaced
+        # by the generated defaults. The reader's exit status is checked
+        # because it can emit valid JSON before failing (e.g. jaq prints the
+        # first object of a truncated stream).
+        if [[ ! -s "$input_path" ]]; then
+          dynamic=${lib.escapeShellArg empty}
+        elif ! dynamic="$(${readerCmd} "$input_path")" || [[ -z "$dynamic" ]]; then
+          errorEcho "Could not parse config at '$display_path'; refusing to merge."
+          exit 1
+        fi
+        static="$(${readerCmd} "$static_path")"
+        previous=
+        if [[ -n "$remove_dropped" && -e "$record_path" ]]; then
+          if ! previous="$(${jaqBin} -c 'if type == "object" and .version == 1 and ((.static | type) == "object" or (.static | type) == "array") then .static else null end' "$record_path")"; then
+            errorEcho "Could not parse the settings last applied to '$display_path' from '$record_path'; refusing to merge."
+            exit 1
+          fi
+          if [[ "$previous" == null ]]; then
+            warnEcho "Ignoring the record of settings last applied to '$display_path' at '$record_path': its version is not 1."
+            previous=
+          fi
+        fi
+        if [[ -n "$previous" ]]; then
+          if ! dynamic="$(printf '%s' "$dynamic" | ${removeCmd})"; then
+            errorEcho "Could not remove the settings no longer declared from '$display_path'; refusing to merge."
+            exit 1
+          fi
+        fi
+        if ! config="$(${jaqBin} -n ${lib.escapeShellArg mergeFilter} --slurpfile dynamic <(printf '%s' "$dynamic") --slurpfile static <(printf '%s' "$static") --slurpfile previous <(printf '%s' "$previous"))"; then
+          errorEcho "Could not merge Nix-generated config into '$display_path'."
+          exit 1
+        fi
+        candidate_path="$(${coreutil "mktemp"} "$settings_path.candidate.XXXXXX")"
+        ${writeCmd}
+        if [[ -n "$snapshot_path" ]]; then
+          ${coreutil "chmod"} --reference="$snapshot_path" -- "$candidate_path"
+        else
+          ${coreutil "chmod"} ${
+            if mode == null then ''"$(printf '%o' "$(( 0666 & ~$(umask) ))")"'' else lib.escapeShellArg mode
+          } -- "$candidate_path"
+        fi
+
+        conflict=
+        if [[ -n "$was_symlink" ]]; then
+          if [[ ! -L "$display_path" ]] \
+            || [[ "$(${coreutil "readlink"} -f -- "$display_path")" != "$settings_path" ]]; then
+            conflict=1
+          fi
+        elif [[ -L "$display_path" ]]; then
+          conflict=1
+        fi
+        if [[ -n "$snapshot_path" ]]; then
+          if [[ -L "$settings_path" ]] \
+            || ! ${lib.getExe' pkgs.diffutils "cmp"} -s -- "$snapshot_path" "$settings_path" \
+            || [[ "$(${coreutil "stat"} -c '%a' -- "$settings_path")" != "$(${coreutil "stat"} -c '%a' -- "$snapshot_path")" ]]; then
+            conflict=1
+          fi
+        elif [[ -e "$settings_path" || -L "$settings_path" ]]; then
+          conflict=1
+        fi
+        if [[ -n "$conflict" ]]; then
+          errorEcho "Config at '$display_path' changed during activation; keeping the newer file."
+          exit 1
+        fi
+
+        if ${coreutil "mv"} -fT -- "$candidate_path" "$settings_path" 2>/dev/null; then
           candidate_path=
-          # Activation owns the outer EXIT trap; cleanup must stay in this subshell.
-          trap '
-            [[ -z "$snapshot_dir" ]] || rm -rf -- "$snapshot_dir"
-            [[ -z "$candidate_path" ]] || rm -f -- "$candidate_path"
-          ' EXIT
+        else
+          # rename(2) fails with EBUSY when the target is a mount point, such
+          # as a file bind-mounted by impermanence; write it in place instead.
+          ${coreutil "cat"} -- "$candidate_path" > "$settings_path"
+        fi
 
-          mkdir -p "$(dirname "$settings_path")"
-          snapshot_path=
-          input_path="$settings_path"
-          if [[ -e "$settings_path" ]]; then
-            # Keep the configured file name so a reader that detects the format
-            # from the extension still recognizes the snapshot, even when the
-            # path is a symlink to a differently named file.
-            snapshot_dir="$(${coreutil "mktemp"} -d "$settings_path.snapshot.XXXXXX")"
-            snapshot_path="$snapshot_dir/''${display_path##*/}"
-            ${coreutil "cp"} --preserve=mode -- "$settings_path" "$snapshot_path"
-            input_path="$snapshot_path"
+        if [[ -n "$static_is_empty" ]]; then
+          rm -f -- "$record_path"
+        else
+          record="$(${jaqBin} -n -c '{version: 1, static: $static[0]}' --slurpfile static <(printf '%s' "$static"))"
+          if [[ ! -e "$record_path" ]] \
+            || ! printf '%s\n' "$record" | ${lib.getExe' pkgs.diffutils "cmp"} -s -- - "$record_path"; then
+            mkdir -p "$(dirname "$record_path")"
+            record_candidate="$(${coreutil "mktemp"} "$record_path.XXXXXX")"
+            printf '%s\n' "$record" > "$record_candidate"
+            ${coreutil "mv"} -fT -- "$record_candidate" "$record_path"
+            record_candidate=
           fi
-
-          # A missing or empty file is treated as `empty`, but an existing file
-          # that fails to parse must fail activation instead of being replaced
-          # by the generated defaults. The reader's exit status is checked
-          # because it can emit valid JSON before failing (e.g. jaq prints the
-          # first object of a truncated stream).
-          if [[ ! -s "$input_path" ]]; then
-            dynamic=${lib.escapeShellArg empty}
-          elif ! dynamic="$(${readerCmd} "$input_path")" || [[ -z "$dynamic" ]]; then
-            errorEcho "Could not parse config at '$display_path'; refusing to merge."
-            exit 1
-          fi
-          static="$(${readerCmd} ${lib.escapeShellArg staticSettings})"
-          if ! config="$(${jaqBin} -n ${lib.escapeShellArg mergeFilter} --slurpfile dynamic <(printf '%s' "$dynamic") --slurpfile static <(printf '%s' "$static"))"; then
-            errorEcho "Could not merge Nix-generated config into '$display_path'."
-            exit 1
-          fi
-          candidate_path="$(${coreutil "mktemp"} "$settings_path.candidate.XXXXXX")"
-          ${writeCmd}
-          if [[ -n "$snapshot_path" ]]; then
-            ${coreutil "chmod"} --reference="$snapshot_path" -- "$candidate_path"
-          else
-            ${coreutil "chmod"} ${
-              if mode == null then ''"$(printf '%o' "$(( 0666 & ~$(umask) ))")"'' else lib.escapeShellArg mode
-            } -- "$candidate_path"
-          fi
-
-          conflict=
-          if [[ -n "$was_symlink" ]]; then
-            if [[ ! -L "$display_path" ]] \
-              || [[ "$(${coreutil "readlink"} -f -- "$display_path")" != "$settings_path" ]]; then
-              conflict=1
-            fi
-          elif [[ -L "$display_path" ]]; then
-            conflict=1
-          fi
-          if [[ -n "$snapshot_path" ]]; then
-            if [[ -L "$settings_path" ]] \
-              || ! ${lib.getExe' pkgs.diffutils "cmp"} -s -- "$snapshot_path" "$settings_path" \
-              || [[ "$(${coreutil "stat"} -c '%a' -- "$settings_path")" != "$(${coreutil "stat"} -c '%a' -- "$snapshot_path")" ]]; then
-              conflict=1
-            fi
-          elif [[ -e "$settings_path" || -L "$settings_path" ]]; then
-            conflict=1
-          fi
-          if [[ -n "$conflict" ]]; then
-            errorEcho "Config at '$display_path' changed during activation; keeping the newer file."
-            exit 1
-          fi
-
-          if ${coreutil "mv"} -fT -- "$candidate_path" "$settings_path" 2>/dev/null; then
-            candidate_path=
-          else
-            # rename(2) fails with EBUSY when the target is a mount point, such
-            # as a file bind-mounted by impermanence; write it in place instead.
-            ${coreutil "cat"} -- "$candidate_path" > "$settings_path"
-          fi
-        )
-      fi
+        fi
+      )
     '';
 
   /**
@@ -1252,10 +1409,12 @@ in
     Manager's normal collision and backup handling. Symlinks are never removed,
     and neither is a file that is the declared source itself or the
     generation's link to it, for example an out-of-store source reached through
-    a symlinked parent directory. The
-    snippet uses the activation helpers `run` and `verboseEcho` to respect
-    dry-run and verbose mode, and is empty when the entry is disabled, since a
-    disabled declaration does not give the module ownership of the path.
+    a symlinked parent directory. The record of the settings last merged into
+    the file is removed, so a later switch back to mutable settings starts
+    without one. The snippet uses the activation helpers `run` and
+    `verboseEcho` to respect dry-run and verbose mode, and is empty when the
+    entry is disabled, since a disabled declaration does not give the module
+    ownership of the path.
 
     Place this snippet with
     `lib.hm.dag.entryBetween [ "linkGeneration" ] [ "writeBoundary" ]`.
@@ -1310,6 +1469,7 @@ in
       target = ''"$HOME"/${lib.escapeShellArg file.target}'';
       generated = ''"$newGenPath/home-files"/${lib.escapeShellArg file.target}'';
       source = lib.escapeShellArg (toString file.source);
+      record = impureConfigRecordPath ''"''${HOME#/}"/${lib.escapeShellArg file.target}'';
     in
     lib.optionalString file.enable ''
       if [[ -f ${target} && ! -L ${target} ]] \
@@ -1317,6 +1477,10 @@ in
         && cmp -s -- ${generated} ${target}; then
         verboseEcho "Removing unchanged config at "${target}" before linking"
         run rm -- ${target}
+      fi
+      if [[ -f ${record} ]]; then
+        verboseEcho "Removing the record of settings merged into "${target}
+        run rm -- ${record}
       fi
     '';
 

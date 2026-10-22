@@ -4,6 +4,8 @@ let
   staticSettings = builtins.toFile "managed.json" ''{"managed":true}'';
   original = builtins.toFile "original.json" ''{"user":true}'';
   concurrent = builtins.toFile "concurrent.json" ''{"newer":true}'';
+  # A record that differs from staticSettings, to show which runs update it.
+  olderRecord = builtins.toFile "older-record.json" ''{"older":true}'';
 
   # The public reader input lets a writer change the target after the snapshot
   # is read, without timing-dependent sleeps or a hook in the merger. It also
@@ -67,26 +69,35 @@ in
     substitute ${racingMerge} "$TMPDIR/racing-merge" --subst-var TMPDIR
     chmod +x "$TMPDIR/merge" "$TMPDIR/racing-merge"
     export TEST_DIRECTORY="$TMPDIR/merger-write"
+    export XDG_STATE_HOME="$TMPDIR/state"
     mkdir -p "$TEST_DIRECTORY"
     settings="$TEST_DIRECTORY/settings.json"
     resolved="$TEST_DIRECTORY/resolved.json"
+    record="$XDG_STATE_HOME/home-manager/mutable-settings$TEST_DIRECTORY/settings.json.json"
+    olderRecord=${olderRecord}
 
     assertClean() {
       if find "$TEST_DIRECTORY" -name '*.candidate.*' -o -name '*.snapshot.*' | grep -q .; then
         fail "Merger left temporary files behind"
       fi
+      if find "$(dirname "$record")" -name 'settings.json.json.*' | grep -q .; then
+        fail "Merger left a temporary record behind"
+      fi
       assertFileExists "$TEST_DIRECTORY/outer-trap"
       rm "$TEST_DIRECTORY/outer-trap"
     }
     expectFailure() {
+      cat "$olderRecord" > "$record"
       if "$@" > "$TMPDIR/failure.log" 2>&1; then
         fail "Merge should fail"
       fi
       assertClean
+      assertFileContent "$record" "$olderRecord"
     }
 
     "$TMPDIR/merge"
     assertClean
+    ${lib.getExe pkgs.jaq} -e '. == {version: 1, static: {managed: true}}' "$record" > /dev/null
     rm "$settings"
     cat ${original} > "$resolved"
     chmod 640 "$resolved"
@@ -195,9 +206,10 @@ in
     expectFailure "$TMPDIR/racing-merge"
     assertFileContent "$settings" ${original}
 
-    rm "$settings"
+    rm "$settings" "$record"
     DRY_RUN=1 VERBOSE=1 "$TMPDIR/merge" > "$TMPDIR/dry-run.log"
     assertPathNotExists "$settings"
+    assertPathNotExists "$record"
     grep -q 'Would merge' "$TMPDIR/dry-run.log" || fail "Expected dry-run output"
     grep -q 'Merging Nix-generated' "$TMPDIR/dry-run.log" || fail "Expected verbose output"
     assertClean

@@ -46,6 +46,7 @@ in
       assertFileContains activate '${configPath}'
       assertFileRegex activate '/bin/pyjson5 --as-json'
 
+      export XDG_STATE_HOME="$PWD/state"
       mkdir profile
       umask 022
       "${merge}"

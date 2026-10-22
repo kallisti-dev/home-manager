@@ -41,7 +41,7 @@ let
       empty = "{}";
       jqOperation = "$dynamic * $static";
       path = "/@TMPDIR@/hm-user/odd $(touch marker)/settings.json";
-      staticSettings = builtins.toFile "static-settings.json" "{}";
+      staticSettings = builtins.toFile "static-settings.json" ''{"managed":true}'';
     }
   );
 
@@ -111,6 +111,7 @@ let
 in
 {
   nmt.script = ''
+    export XDG_STATE_HOME=$TMPDIR/state
     substitute ${mergeJson} $TMPDIR/merge-json --subst-var TMPDIR
     substitute ${mergeToml} $TMPDIR/merge-toml --subst-var TMPDIR
     substitute ${mergeLargeStatic} $TMPDIR/merge-large-static --subst-var TMPDIR

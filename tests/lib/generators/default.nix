@@ -7,5 +7,7 @@
   generators-mkimpureconfigmerger = ./mkImpureConfigMerger.nix;
   generators-mkimpureconfigmerger-mode = ./mkImpureConfigMerger-mode.nix;
   generators-mkimpureconfigmerger-write = ./mkImpureConfigMerger-write.nix;
+  generators-mkimpureconfigmerger-removal = ./mkImpureConfigMerger-removal.nix;
+  generators-mkimpureconfigmerger-removal-program = ./mkImpureConfigMerger-removal-program.nix;
   generators-mkimpureconfigcleanup = ./mkImpureConfigCleanup.nix;
 }

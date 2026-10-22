@@ -76,14 +76,27 @@ in
     ln -s ${source} "$TMPDIR/generation/home-files/config's settings.json"
     target="$HOME/config's settings.json"
 
+    record="$HOME/.local/state/home-manager/mutable-settings$target.json"
+    mkdir -p "$(dirname "$record")"
+    echo '{"managed":true}' > "$record"
     install -m600 ${source} "$target"
     DRY_RUN=1 ${cleanup} > "$TMPDIR/dry-output"
     assertFileContent "$target" ${source}
+    assertFileExists "$record"
     grep -F "rm -- $target" "$TMPDIR/dry-output"
 
     VERBOSE=1 ${cleanup} > "$TMPDIR/verbose-output"
     assertPathNotExists "$target"
+    assertPathNotExists "$record"
     grep -F "Removing unchanged config at $target before linking" "$TMPDIR/verbose-output"
+
+    # The record goes even when the file stays for collision handling.
+    echo '{"managed":true}' > "$record"
+    install -m600 ${changed} "$target"
+    ${cleanup}
+    assertFileContent "$target" ${changed}
+    assertPathNotExists "$record"
+    rm "$target"
 
     install -m600 ${source} "$target"
     ${cleanup} > "$TMPDIR/quiet-output"
