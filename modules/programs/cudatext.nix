@@ -30,10 +30,17 @@ in
         Whether to merge declared user settings, hotkeys and lexer settings
         into writable files during activation. Existing comments and trailing
         commas are accepted, but comments and formatting are lost when writing
-        JSON. Declared values, including arrays, take precedence. Removing a
-        declaration does not remove it from the file. Switching back to
-        immutable settings only removes byte-identical files; changed files
+        JSON. Declared values, including arrays, take precedence. Switching back
+        to immutable settings only removes byte-identical files; changed files
         require backup or removal.
+
+        With [](#opt-home.mutableSettings.removeDropped), settings removed from
+        the configuration are removed from the files unless CudaText has
+        changed them since. Hotkey entries are removed whole, with what
+        CudaText added to them, or kept whole if a declared value changed.
+        Removing a lexer from [](#opt-programs.cudatext.lexerSettings) or
+        [](#opt-programs.cudatext.lexerHotkeys) leaves its file as it is; set
+        the lexer to `{ }` first to remove its settings.
       '';
     };
 
@@ -149,25 +156,28 @@ in
           "Library/Application Support/CudaText/settings"
         else
           "${lib.removePrefix config.home.homeDirectory config.xdg.configHome}/cudatext/settings";
-      settingsFiles =
-        lib.optionalAttrs (cfg.hotkeys != { }) {
-          "${settingsPath}/keys.json".source = jsonFormat.generate "cudatext-keys.json" cfg.hotkeys;
+      settingsFiles = {
+        "${settingsPath}/keys.json".source = jsonFormat.generate "cudatext-keys.json" cfg.hotkeys;
+        "${settingsPath}/user.json".source = jsonFormat.generate "cudatext-user.json" cfg.userSettings;
+      }
+      // (mapAttrs' (
+        k: v:
+        nameValuePair "${settingsPath}/lexer ${k}.json" {
+          source = jsonFormat.generate "cudatext-lexer-${k}" v;
         }
-        // lib.optionalAttrs (cfg.userSettings != { }) {
-          "${settingsPath}/user.json".source = jsonFormat.generate "cudatext-user.json" cfg.userSettings;
+      ) cfg.lexerSettings)
+      // (mapAttrs' (
+        k: v:
+        nameValuePair "${settingsPath}/keys lexer ${k}.json" {
+          source = jsonFormat.generate "cudatext-lexer-keys-${k}" v;
         }
-        // (mapAttrs' (
-          k: v:
-          nameValuePair "${settingsPath}/lexer ${k}.json" {
-            source = jsonFormat.generate "cudatext-lexer-${k}" v;
-          }
-        ) cfg.lexerSettings)
-        // (mapAttrs' (
-          k: v:
-          nameValuePair "${settingsPath}/keys lexer ${k}.json" {
-            source = jsonFormat.generate "cudatext-lexer-keys-${k}" v;
-          }
-        ) cfg.lexerHotkeys);
+      ) cfg.lexerHotkeys);
+      # Hotkeys and user settings are linked only when declared, but merged
+      # even when empty, so that removing the last one removes it.
+      linkedFiles = removeAttrs settingsFiles (
+        lib.optional (cfg.hotkeys == { }) "${settingsPath}/keys.json"
+        ++ lib.optional (cfg.userSettings == { }) "${settingsPath}/user.json"
+      );
       json5 = pkgs.python3Packages.toPythonApplication pkgs.python3Packages.json5;
       settingsDirectory =
         if pkgs.stdenv.hostPlatform.isDarwin then
@@ -179,10 +189,10 @@ in
       home = {
         packages = mkIf (cfg.package != null) [ cfg.package ];
 
-        file = mkIf (!cfg.mutableSettings) settingsFiles;
+        file = mkIf (!cfg.mutableSettings) linkedFiles;
 
         activation = {
-          cudatextSettings = mkIf (cfg.mutableSettings && settingsFiles != { }) (
+          cudatextSettings = mkIf cfg.mutableSettings (
             lib.hm.dag.entryAfter [ "linkGeneration" ] (
               lib.concatStringsSep "\n" (
                 lib.mapAttrsToList (
@@ -195,17 +205,23 @@ in
                     path = "${settingsDirectory}/${lib.removePrefix "${settingsPath}/" name}";
                     staticSettings = file.source;
                     reader = "${lib.getExe json5} --as-json";
+                    removal = {
+                      enable = config.home.mutableSettings.removeDropped;
+                      # CudaText unbinds a command whose entry lacks `s1`, so
+                      # entries in the hotkey files are removed or kept whole.
+                      atomic = lib.optional (lib.hasPrefix "keys" (baseNameOf name)) [ "*" ];
+                    };
                   }
                 ) settingsFiles
               )
             )
           );
-          cudatextImmutableSettings = mkIf (!cfg.mutableSettings && settingsFiles != { }) (
+          cudatextImmutableSettings = mkIf (!cfg.mutableSettings && linkedFiles != { }) (
             lib.hm.dag.entryBetween [ "linkGeneration" ] [ "writeBoundary" ] (
               lib.concatStringsSep "\n" (
                 lib.mapAttrsToList (
                   name: _: lib.hm.generators.mkImpureConfigCleanup { file = config.home.file.${name}; }
-                ) settingsFiles
+                ) linkedFiles
               )
             )
           );
