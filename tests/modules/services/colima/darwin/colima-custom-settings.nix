@@ -28,10 +28,12 @@
       memory = 8;
       kubernetes.enabled = true;
     };
+    profiles.containerd.settings.runtime = "containerd";
   };
 
   nmt.script = ''
     assertFileExists home-files/.colima/default/colima.yaml
     assertFileContent home-files/.colima/default/colima.yaml ${./custom-settings-expected.yaml}
+    assertFileRegex home-files/.colima/containerd/colima.yaml '^runtime: containerd$'
   '';
 }

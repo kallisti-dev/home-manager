@@ -3,3 +3,4 @@
 cpu: 4
 env:
   TEST_TOKEN: test-only
+runtime: docker

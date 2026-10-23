@@ -7,6 +7,11 @@
 let
   cfg = config.services.colima;
   yamlFormat = pkgs.formats.yaml { };
+
+  # Colima ignores a configuration without `runtime` and starts with its
+  # defaults instead.
+  # https://github.com/abiosoft/colima/blob/v0.10.3/cmd/start.go#L473-L490
+  profileSettings = profile: { runtime = "docker"; } // profile.settings;
 in
 {
   meta.maintainers = [
@@ -175,7 +180,10 @@ in
               settings = lib.mkOption {
                 inherit (yamlFormat) type;
                 default = { };
-                description = "Colima configuration settings, see <https://github.com/abiosoft/colima/blob/main/embedded/defaults/colima.yaml> or run `colima template`.";
+                description = ''
+                  Colima configuration settings, see <https://github.com/abiosoft/colima/blob/main/embedded/defaults/colima.yaml> or run `colima template`.
+                  If any settings are given, `runtime` defaults to `"docker"`.
+                '';
                 example = ''
                   {
                     cpu = 2;
@@ -263,7 +271,7 @@ in
                 empty = "{}";
                 jqOperation = "$dynamic * $static";
                 path = "${colimaHome}/${name}/colima.yaml";
-                staticSettings = yamlFormat.generate "colima.yaml" profile.settings;
+                staticSettings = yamlFormat.generate "colima.yaml" (profileSettings profile);
                 mode = "600";
               }
             )
@@ -276,7 +284,7 @@ in
           lib.mapAttrsToList
             (profileName: profile: {
               "${cfg.colimaHomeDir}/${profileName}/colima.yaml" = {
-                source = yamlFormat.generate "colima.yaml" profile.settings;
+                source = yamlFormat.generate "colima.yaml" (profileSettings profile);
               };
             })
             (lib.filterAttrs (_name: profile: !profile.mutableSettings && profile.settings != { }) cfg.profiles)

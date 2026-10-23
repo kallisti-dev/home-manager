@@ -4,3 +4,4 @@ cpu: 4
 kubernetes:
   enabled: true
 memory: 8
+runtime: docker
